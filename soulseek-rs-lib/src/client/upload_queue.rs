@@ -174,6 +174,20 @@ impl ClientContext {
         (self.peer_registry.clone(), offers)
     }
 
+    /// Remove `downloader`'s still-queued `filename`; false when it is not
+    /// waiting.
+    pub fn cancel_queued_upload(
+        &mut self,
+        downloader: &str,
+        filename: &str,
+    ) -> bool {
+        let before = self.upload_queue.len();
+        self.upload_queue.retain(|job| {
+            !(job.downloader == downloader && job.virtual_path == filename)
+        });
+        before != self.upload_queue.len()
+    }
+
     /// Take the queued-upload states recorded since the last call.
     pub fn take_upload_events(&mut self) -> Vec<UploadInfo> {
         std::mem::take(&mut self.upload_events)
@@ -424,6 +438,31 @@ mod context_tests {
             .into_iter()
             .map(|offer| offer.requester_key)
             .collect()
+    }
+
+    #[test]
+    fn zero_slots_never_dequeue_and_raising_them_does() {
+        let (mut ctx, mut token) = context(0);
+        ask(&mut ctx, "a", "f.mp3");
+
+        assert!(offered(&mut ctx, &mut token).is_empty());
+        assert!(!ctx.has_free_upload_slot());
+        assert_eq!(ctx.place_in_queue("a", "f.mp3"), Some(1));
+
+        ctx.upload_slots = 1;
+        assert_eq!(offered(&mut ctx, &mut token), ["a"]);
+    }
+
+    #[test]
+    fn cancelling_a_queued_upload_removes_only_that_entry() {
+        let (mut ctx, _) = context(0);
+        ask(&mut ctx, "a", "f.mp3");
+        ask(&mut ctx, "a", "g.mp3");
+
+        assert!(ctx.cancel_queued_upload("a", "f.mp3"));
+        assert!(!ctx.cancel_queued_upload("a", "f.mp3"));
+        assert_eq!(ctx.place_in_queue("a", "f.mp3"), None);
+        assert_eq!(ctx.place_in_queue("a", "g.mp3"), Some(1));
     }
 
     #[test]

@@ -149,6 +149,59 @@ fn protected_peers_covers_downloads_uploads_and_pending_serves() {
 }
 
 #[test]
+fn cancel_upload_removes_a_queued_entry() {
+    let client = Client::new("test-user", "test-password");
+    client.context.write().unwrap().enqueue_upload(
+        "amy",
+        "@@share\\f.mp3",
+        std::path::PathBuf::from("/tmp/f.mp3"),
+        4096,
+    );
+
+    assert!(client.cancel_upload("amy", "@@share\\f.mp3"));
+    assert!(client.context.read().unwrap().queued_uploads().is_empty());
+    assert!(!client.cancel_upload("amy", "@@share\\f.mp3"));
+}
+
+#[test]
+fn cancel_upload_still_stops_a_running_upload() {
+    let client = Client::new("test-user", "test-password");
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    client.context.write().unwrap().active_uploads.insert(
+        1,
+        ActiveUpload {
+            username: "amy".to_string(),
+            filename: "@@share\\f.mp3".to_string(),
+            size: 4096,
+            bytes_sent: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            cancel: cancel.clone(),
+            status: UploadStatus::InProgress,
+            started: Instant::now(),
+        },
+    );
+
+    assert!(client.cancel_upload("amy", "@@share\\f.mp3"));
+    assert!(cancel.load(std::sync::atomic::Ordering::Relaxed));
+}
+
+#[test]
+fn zero_upload_slots_keep_uploads_queued_until_raised() {
+    let client = Client::new("test-user", "test-password");
+    client.set_upload_slots(0);
+    client.context.write().unwrap().enqueue_upload(
+        "amy",
+        "@@share\\f.mp3",
+        std::path::PathBuf::from("/tmp/f.mp3"),
+        4096,
+    );
+    Client::pump_upload_queue(&client.context);
+    assert_eq!(client.context.read().unwrap().queued_uploads().len(), 1);
+
+    client.set_upload_slots(1);
+    assert!(client.context.read().unwrap().queued_uploads().is_empty());
+}
+
+#[test]
 fn a_peer_message_nobody_could_deliver_expires() {
     let mut ctx = ClientContext::for_user("me");
     ctx.queue_peer_message("ghost", crate::message::Message::new());

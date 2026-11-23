@@ -55,12 +55,14 @@ impl Client {
             .unwrap_or_default()
     }
 
-    /// How many uploads run at once. Lowering it does not interrupt transfers
-    /// already in flight; the queue simply refills more slowly.
+    /// How many uploads run at once; `0` starts nothing and keeps everything
+    /// queued. Lowering it does not interrupt transfers already in flight; the
+    /// queue simply refills more slowly.
     pub fn set_upload_slots(&self, slots: usize) {
         if let Ok(mut ctx) = self.context.write_safe() {
-            ctx.upload_slots = slots.max(1);
+            ctx.upload_slots = slots;
         }
+        Self::pump_upload_queue(&self.context);
     }
 
     /// Cap the combined speed of all uploads in bytes per second; `0` lifts it.

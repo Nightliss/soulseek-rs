@@ -846,25 +846,41 @@ impl Client {
         )
     }
 
-    /// Ask an in-progress upload to `username` of `filename` to stop.
-    /// Returns whether a matching in-progress upload was found.
+    /// Cancel `username`'s upload of `filename`: stop it when in progress, or
+    /// drop it from the queue and tell the peer it was denied. Returns whether
+    /// a matching upload was found.
     #[must_use = "returns whether a matching upload was found"]
     pub fn cancel_upload(&self, username: &str, filename: &str) -> bool {
-        self.context.read_safe().is_ok_and(|ctx| {
-            let mut found = false;
-            for upload in ctx.active_uploads.values() {
-                if upload.username == username
-                    && upload.filename == filename
-                    && upload.status == crate::types::UploadStatus::InProgress
-                {
-                    upload
-                        .cancel
-                        .store(true, std::sync::atomic::Ordering::Relaxed);
-                    found = true;
-                }
+        let Ok(mut ctx) = self.context.write_safe() else {
+            return false;
+        };
+        let mut found = false;
+        for upload in ctx.active_uploads.values() {
+            if upload.username == username
+                && upload.filename == filename
+                && upload.status == crate::types::UploadStatus::InProgress
+            {
+                upload
+                    .cancel
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                found = true;
             }
-            found
-        })
+        }
+        if ctx.cancel_queued_upload(username, filename) {
+            found = true;
+            if let Some(registry) = &ctx.peer_registry {
+                let _ = registry.send_to_peer(
+                    username,
+                    PeerMessage::SendMessage(
+                        crate::message::peer::build_upload_denied(
+                            filename,
+                            "Cancelled",
+                        ),
+                    ),
+                );
+            }
+        }
+        found
     }
 
     /// Replace the shared directories at runtime: rescan into a fresh

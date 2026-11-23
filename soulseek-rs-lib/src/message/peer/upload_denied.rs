@@ -21,6 +21,16 @@ impl MessageHandler<PeerMessage> for UploadDeniedHandler {
     }
 }
 
+/// Build an `UploadDenied` (peer code 50) for `filename`.
+#[must_use]
+pub fn build_upload_denied(filename: &str, reason: &str) -> Message {
+    Message::new()
+        .write_int32(50)
+        .write_string(filename)
+        .write_string(reason)
+        .clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -35,6 +45,14 @@ mod tests {
 
         UploadDeniedHandler.handle(&mut message, tx);
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_built_denial_carries_filename_and_reason() {
+        let mut message = build_upload_denied("@@share\\f.mp3", "Cancelled");
+        message.set_pointer(4);
+        assert_eq!(message.read_string(), "@@share\\f.mp3");
+        assert_eq!(message.read_string(), "Cancelled");
     }
 
     #[test]
