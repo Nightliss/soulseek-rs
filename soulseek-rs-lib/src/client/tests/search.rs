@@ -191,3 +191,26 @@ fn settings_excludes_apply_to_the_rescanned_index() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn settings_dir_prefixes_apply_to_the_rescanned_index() {
+    let dir = std::env::temp_dir()
+        .join(format!("soulseek-skipprefix-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("sub").join("_hold")).unwrap();
+    std::fs::write(dir.join("keep.bin"), b"k").unwrap();
+    std::fs::write(dir.join("sub").join("_hold").join("hidden.bin"), b"h")
+        .unwrap();
+    let base = dir.file_name().unwrap().to_string_lossy().into_owned();
+
+    let client = Client::with_settings(ClientSettings {
+        excluded_dir_prefixes: vec!["_".to_string()],
+        ..ClientSettings::new("me", "pw")
+    });
+    let _ = client.set_shared_directories(vec![dir.display().to_string()]);
+
+    let shares = client.context.read().unwrap().shares.clone();
+    assert!(shares.get(&format!("{base}\\keep.bin")).is_some());
+    assert!(shares.search("hidden").is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}

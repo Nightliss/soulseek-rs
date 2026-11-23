@@ -64,16 +64,19 @@ impl Shares {
     /// their virtual paths cannot collide.
     #[must_use]
     pub fn scan_many(roots: &[PathBuf]) -> Self {
-        Self::scan_many_excluding(roots, &[])
+        Self::scan_many_excluding(roots, &[], &[])
     }
 
     /// Like [`Shares::scan_many`], but a directory (or file) in `excluded`
     /// and everything below it is left out of the index. `excluded` holds
-    /// absolute paths; one outside every root has no effect.
+    /// absolute paths; one outside every root has no effect. A directory
+    /// below a root whose name starts with a non-empty `excluded_prefixes`
+    /// entry is left out the same way.
     #[must_use]
     pub fn scan_many_excluding(
         roots: &[PathBuf],
         excluded: &[PathBuf],
+        excluded_prefixes: &[String],
     ) -> Self {
         let mut files = Vec::new();
         let mut folder_count = 0;
@@ -95,7 +98,14 @@ impl Shares {
             } else {
                 format!("{base} ({uses})")
             };
-            scan_root(root, &name, excluded, &mut files, &mut folder_count);
+            scan_root(
+                root,
+                &name,
+                excluded,
+                excluded_prefixes,
+                &mut files,
+                &mut folder_count,
+            );
         }
 
         Self::from_files(files, folder_count)
@@ -194,12 +204,23 @@ fn root_display_name(root: &Path) -> String {
     )
 }
 
+fn has_excluded_prefix(dir: &Path, prefixes: &[String]) -> bool {
+    let Some(name) = dir.file_name() else {
+        return false;
+    };
+    let name = name.as_encoded_bytes();
+    prefixes
+        .iter()
+        .any(|p| !p.is_empty() && name.starts_with(p.as_bytes()))
+}
+
 /// Recursively walk `root`, appending its files (under the virtual root name
 /// `root_name`) to `files` and counting folders that contain files.
 fn scan_root(
     root: &Path,
     root_name: &str,
     excluded: &[PathBuf],
+    excluded_prefixes: &[String],
     files: &mut Vec<SharedFile>,
     folder_count: &mut usize,
 ) {
@@ -219,7 +240,10 @@ fn scan_root(
                 continue;
             }
             let path = entry.path();
-            if excluded.iter().any(|skip| path.starts_with(skip)) {
+            if excluded.iter().any(|skip| path.starts_with(skip))
+                || (meta.is_dir()
+                    && has_excluded_prefix(&path, excluded_prefixes))
+            {
                 continue;
             }
             if meta.is_dir() {
@@ -323,6 +347,7 @@ mod tests {
         let shares = Shares::scan_many_excluding(
             std::slice::from_ref(&root),
             &[root.join("album")],
+            &[],
         );
         assert_eq!(shares.file_count(), 1);
         assert!(shares.get(&format!("{base}\\top.mp3")).is_some());
@@ -333,6 +358,90 @@ mod tests {
                 .is_none()
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn prefix_scan(root: &std::path::Path, prefixes: &[&str]) -> Shares {
+        let prefixes: Vec<String> =
+            prefixes.iter().map(|p| (*p).to_string()).collect();
+        Shares::scan_many_excluding(
+            std::slice::from_ref(&root.to_path_buf()),
+            &[],
+            &prefixes,
+        )
+    }
+
+    #[test]
+    fn prefixed_directories_are_skipped_at_any_depth() {
+        let root = temp_tree();
+        let nested = root.join("album").join("_untagged");
+        std::fs::create_dir_all(nested.join("deep")).unwrap();
+        std::fs::write(nested.join("a.flac"), b"e").unwrap();
+        std::fs::write(nested.join("deep").join("b.flac"), b"e").unwrap();
+        std::fs::create_dir_all(root.join("_top")).unwrap();
+        std::fs::write(root.join("_top").join("c.flac"), b"e").unwrap();
+        std::fs::create_dir_all(root.join("album").join("keep_me")).unwrap();
+        std::fs::write(root.join("album").join("keep_me").join("d.flac"), b"e")
+            .unwrap();
+
+        let shares = prefix_scan(&root, &["_"]);
+        let base = root.file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(shares.file_count(), 4);
+        assert_eq!(shares.folder_count(), 3);
+        assert!(shares.get(&format!("{base}\\top.mp3")).is_some());
+        assert!(
+            shares
+                .get(&format!("{base}\\album\\song one.flac"))
+                .is_some()
+        );
+        assert!(
+            shares
+                .get(&format!("{base}\\album\\keep_me\\d.flac"))
+                .is_some()
+        );
+        assert!(
+            shares
+                .get(&format!("{base}\\album\\_untagged\\a.flac"))
+                .is_none()
+        );
+        assert!(
+            shares
+                .get(&format!("{base}\\album\\_untagged\\deep\\b.flac"))
+                .is_none()
+        );
+        assert!(shares.get(&format!("{base}\\_top\\c.flac")).is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn files_named_with_the_prefix_stay_shared() {
+        let root = temp_tree();
+        std::fs::write(root.join("_intro.mp3"), b"i").unwrap();
+        let shares = prefix_scan(&root, &["_"]);
+        let base = root.file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(shares.file_count(), 4);
+        assert!(shares.get(&format!("{base}\\_intro.mp3")).is_some());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn empty_prefix_excludes_nothing() {
+        let root = temp_tree();
+        let shares = prefix_scan(&root, &[""]);
+        assert_eq!(shares.file_count(), 3);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn root_named_with_the_prefix_is_still_scanned() {
+        let root = temp_tree().join("_root");
+        std::fs::create_dir_all(root.join("_skip")).unwrap();
+        std::fs::write(root.join("in.mp3"), b"d").unwrap();
+        std::fs::write(root.join("_skip").join("out.mp3"), b"d").unwrap();
+
+        let shares = prefix_scan(&root, &["_"]);
+        assert_eq!(shares.file_count(), 1);
+        assert!(shares.get("_root\\in.mp3").is_some());
+        let _ = std::fs::remove_dir_all(root.parent().unwrap());
     }
 
     #[test]

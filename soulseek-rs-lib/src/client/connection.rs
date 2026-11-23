@@ -72,6 +72,7 @@ impl Client {
         let shares = Arc::new(super::scan_shares(
             &self.shared_directories,
             &self.excluded_directories,
+            &self.excluded_dir_prefixes,
         ));
         let shared_folder_count = shares.folder_count();
         let shared_file_count = shares.file_count();
