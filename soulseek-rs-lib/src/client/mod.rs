@@ -228,6 +228,27 @@ fn path_carries_excluded_phrase(path: &str, excluded: &[String]) -> bool {
         .any(|phrase| !phrase.is_empty() && lowered.contains(phrase))
 }
 
+pub(crate) fn scan_shares(dirs: &[String], excluded: &[String]) -> Shares {
+    let paths = |list: &[String]| -> Vec<std::path::PathBuf> {
+        list.iter()
+            .filter(|dir| !dir.trim().is_empty())
+            .map(std::path::PathBuf::from)
+            .collect()
+    };
+    let roots = paths(dirs);
+    if roots.is_empty() {
+        return Shares::empty();
+    }
+    let shares = Shares::scan_many_excluding(&roots, &paths(excluded));
+    info!(
+        "Sharing {} files in {} folders from {} directories",
+        shares.file_count(),
+        shares.folder_count(),
+        roots.len()
+    );
+    shares
+}
+
 #[derive(Debug, Clone)]
 pub struct ClientSettings {
     pub username: String,
@@ -238,6 +259,9 @@ pub struct ClientSettings {
     /// Directories whose files are shared with (uploaded to) other peers.
     /// Empty means nothing is shared.
     pub shared_directories: Vec<String>,
+    /// Absolute paths left out of the share index: each one and everything
+    /// below it is never listed, searchable or served.
+    pub excluded_directories: Vec<String>,
     /// Whether to serve children in the distributed search network: peers
     /// hang from us with a `D` connection and we pass every search we receive
     /// down to them. Off by default — it costs a socket and the network's
@@ -275,6 +299,7 @@ impl Default for ClientSettings {
             enable_listen: true,
             listen_port: DEFAULT_LISTEN_PORT,
             shared_directories: Vec::new(),
+            excluded_directories: Vec::new(),
             accept_children: false,
             version: ClientVersion::default(),
         }
@@ -510,6 +535,7 @@ pub struct ClientContext {
     pub shares: Arc<Shares>,
     /// The directories the current share index was built from.
     pub shared_directories: Vec<String>,
+    pub(crate) upload_speed_limit: Arc<RateLimit>,
     /// Peer listen addresses learned from GetPeerAddress responses.
     peer_addresses: HashMap<String, (String, u32)>,
     /// Peer messages waiting for a control connection to that peer, and
@@ -664,6 +690,7 @@ pub struct Client {
     password: String,
     version: ClientVersion,
     shared_directories: Vec<String>,
+    excluded_directories: Vec<String>,
     server_handle: Option<ActorHandle<ServerMessage>>,
     context: Arc<RwLock<ClientContext>>,
     session: SessionWatch,
@@ -703,6 +730,7 @@ impl Client {
             password: settings.password,
             version: settings.version,
             shared_directories: settings.shared_directories,
+            excluded_directories: settings.excluded_directories,
             server_handle: None,
             session: SessionWatch::default(),
             listener_stopped: Arc::new(AtomicBool::new(false)),
@@ -846,22 +874,7 @@ impl Client {
     /// # Errors
     /// Returns [`SoulseekRs::NotConnected`] if the client is not connected.
     pub fn set_shared_directories(&self, dirs: Vec<String>) -> Result<()> {
-        let roots: Vec<std::path::PathBuf> = dirs
-            .iter()
-            .filter(|dir| !dir.trim().is_empty())
-            .map(std::path::PathBuf::from)
-            .collect();
-        let shares = if roots.is_empty() {
-            Shares::empty()
-        } else {
-            Shares::scan_many(&roots)
-        };
-        info!(
-            "Now sharing {} files in {} folders from {} directories",
-            shares.file_count(),
-            shares.folder_count(),
-            roots.len()
-        );
+        let shares = scan_shares(&dirs, &self.excluded_directories);
         let folder_count = shares.folder_count();
         let file_count = shares.file_count();
         {

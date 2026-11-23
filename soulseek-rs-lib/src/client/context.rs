@@ -45,6 +45,7 @@ impl ClientContext {
             download_speed_limit: Arc::default(),
             shares: Arc::new(Shares::empty()),
             shared_directories: Vec::new(),
+            upload_speed_limit: Arc::default(),
             peer_addresses: HashMap::new(),
             pending_peer_messages: HashMap::new(),
             uploads: HashMap::new(),

@@ -64,6 +64,17 @@ impl Shares {
     /// their virtual paths cannot collide.
     #[must_use]
     pub fn scan_many(roots: &[PathBuf]) -> Self {
+        Self::scan_many_excluding(roots, &[])
+    }
+
+    /// Like [`Shares::scan_many`], but a directory (or file) in `excluded`
+    /// and everything below it is left out of the index. `excluded` holds
+    /// absolute paths; one outside every root has no effect.
+    #[must_use]
+    pub fn scan_many_excluding(
+        roots: &[PathBuf],
+        excluded: &[PathBuf],
+    ) -> Self {
         let mut files = Vec::new();
         let mut folder_count = 0;
         let mut name_uses: HashMap<String, u32> = HashMap::new();
@@ -84,7 +95,7 @@ impl Shares {
             } else {
                 format!("{base} ({uses})")
             };
-            scan_root(root, &name, &mut files, &mut folder_count);
+            scan_root(root, &name, excluded, &mut files, &mut folder_count);
         }
 
         Self::from_files(files, folder_count)
@@ -188,6 +199,7 @@ fn root_display_name(root: &Path) -> String {
 fn scan_root(
     root: &Path,
     root_name: &str,
+    excluded: &[PathBuf],
     files: &mut Vec<SharedFile>,
     folder_count: &mut usize,
 ) {
@@ -207,6 +219,9 @@ fn scan_root(
                 continue;
             }
             let path = entry.path();
+            if excluded.iter().any(|skip| path.starts_with(skip)) {
+                continue;
+            }
             if meta.is_dir() {
                 stack.push(path);
             } else if meta.is_file() {
@@ -294,6 +309,29 @@ mod tests {
             .find(|f| f.virtual_path.ends_with("cover.jpg"))
             .unwrap();
         assert!(cover.attributes.is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_excluded_subtree_is_not_indexed() {
+        let root = temp_tree();
+        std::fs::create_dir_all(root.join("album").join("staging")).unwrap();
+        std::fs::write(root.join("album").join("staging").join("x.flac"), b"e")
+            .unwrap();
+        let base = root.file_name().unwrap().to_string_lossy().into_owned();
+
+        let shares = Shares::scan_many_excluding(
+            std::slice::from_ref(&root),
+            &[root.join("album")],
+        );
+        assert_eq!(shares.file_count(), 1);
+        assert!(shares.get(&format!("{base}\\top.mp3")).is_some());
+        assert!(shares.search("song").is_empty());
+        assert!(
+            shares
+                .get(&format!("{base}\\album\\staging\\x.flac"))
+                .is_none()
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

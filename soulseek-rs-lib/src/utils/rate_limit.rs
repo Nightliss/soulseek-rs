@@ -1,3 +1,4 @@
+use std::io::{self, Read};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -45,6 +46,17 @@ impl RateLimit {
             drop(bucket);
             std::thread::sleep(TICK.saturating_sub(since));
         }
+    }
+
+    pub fn read_throttled<R: Read>(
+        &self,
+        src: &mut R,
+        buf: &mut [u8],
+    ) -> io::Result<usize> {
+        let allowance = self.take(buf.len());
+        let read = src.read(&mut buf[..allowance]);
+        self.give_back(allowance - read.as_ref().map_or(0, |&n| n));
+        read
     }
 
     pub fn give_back(&self, unused: usize) {

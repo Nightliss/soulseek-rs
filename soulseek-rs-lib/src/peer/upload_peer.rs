@@ -10,6 +10,7 @@ use std::time::Duration;
 use crate::message::server::MessageFactory;
 use crate::peer::ConnectionType;
 use crate::trace;
+use crate::utils::rate_limit::RateLimit;
 
 /// Connect to the downloader's file listener and stream `path`'s bytes.
 ///
@@ -25,6 +26,7 @@ use crate::trace;
 /// # Errors
 /// Returns any I/O error opening the file or talking to the peer.
 #[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 pub fn serve_file(
     host: &str,
     port: u32,
@@ -33,9 +35,18 @@ pub fn serve_file(
     path: &Path,
     bytes_sent: &AtomicU64,
     cancel: &AtomicBool,
+    speed_limit: &RateLimit,
 ) -> io::Result<u64> {
     let stream = dial(host, port)?;
-    serve_direct(stream, own_username, token, path, bytes_sent, cancel)
+    serve_direct(
+        stream,
+        own_username,
+        token,
+        path,
+        bytes_sent,
+        cancel,
+        speed_limit,
+    )
 }
 
 /// Connect to `host:port` with the transfer deadlines applied.
@@ -83,6 +94,7 @@ pub fn serve_direct(
     path: &Path,
     bytes_sent: &AtomicU64,
     cancel: &AtomicBool,
+    speed_limit: &RateLimit,
 ) -> io::Result<u64> {
     let file = File::open(path)?;
     // PeerInit(F) + the 4-byte token in a single write so they coalesce.
@@ -95,7 +107,7 @@ pub fn serve_direct(
     init.extend_from_slice(&token.to_le_bytes());
     stream.write_all(&init)?;
     stream.flush()?;
-    stream_file(stream, file, path, bytes_sent, cancel)
+    stream_file(stream, file, path, bytes_sent, cancel, speed_limit)
 }
 
 /// Stream `path` over a connection the downloader opened to us after the
@@ -110,12 +122,13 @@ pub fn serve_pierced(
     path: &Path,
     bytes_sent: &AtomicU64,
     cancel: &AtomicBool,
+    speed_limit: &RateLimit,
 ) -> io::Result<u64> {
     let file = File::open(path)?;
     let mut stream = with_deadlines(stream)?;
     stream.write_all(&token.to_le_bytes())?;
     stream.flush()?;
-    stream_file(stream, file, path, bytes_sent, cancel)
+    stream_file(stream, file, path, bytes_sent, cancel, speed_limit)
 }
 
 fn stream_file(
@@ -124,6 +137,7 @@ fn stream_file(
     path: &Path,
     bytes_sent: &AtomicU64,
     cancel: &AtomicBool,
+    speed_limit: &RateLimit,
 ) -> io::Result<u64> {
     // The downloader replies with an 8-byte START_DOWNLOAD offset first. A
     // non-zero offset means it is resuming and already holds that prefix, so
@@ -147,7 +161,7 @@ fn stream_file(
         if cancel.load(Ordering::Relaxed) {
             return Err(io::ErrorKind::Interrupted.into());
         }
-        let read = file.read(&mut buffer)?;
+        let read = speed_limit.read_throttled(&mut file, &mut buffer)?;
         if read == 0 {
             break;
         }
@@ -173,6 +187,7 @@ fn stream_file(
 #[cfg(test)]
 mod tests {
     use super::serve_file;
+    use crate::utils::rate_limit::RateLimit;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -229,6 +244,7 @@ mod tests {
                 &path,
                 &sent_counter,
                 &cancel,
+                &RateLimit::default(),
             )
         });
         (bytes_sent, uploader)
@@ -334,6 +350,7 @@ mod tests {
                 &path,
                 &AtomicU64::new(0),
                 &AtomicBool::new(false),
+                &RateLimit::default(),
             );
             let _ = result_tx.send(result);
         });
@@ -352,6 +369,44 @@ mod tests {
 
         drop(stream);
         let _ = uploader.join();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn serve_file_is_paced_by_the_speed_limit() {
+        let content = vec![9u8; 50_000];
+        let path = scratch_file("paced", &content);
+        let dir = path.parent().unwrap().to_path_buf();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = u32::from(listener.local_addr().unwrap().port());
+        let limit = RateLimit::default();
+        limit.set(100_000);
+
+        let started = std::time::Instant::now();
+        let uploader = std::thread::spawn(move || {
+            serve_file(
+                "127.0.0.1",
+                port,
+                "me",
+                784,
+                &path,
+                &AtomicU64::new(0),
+                &AtomicBool::new(false),
+                &limit,
+            )
+        });
+        let (mut stream, _) = accept_and_send_offset(&listener, 0);
+        let mut received = vec![0; content.len()];
+        stream.read_exact(&mut received).unwrap();
+
+        assert_eq!(received, content);
+        assert!(
+            started.elapsed() >= Duration::from_millis(300),
+            "50 kB at 100 kB/s cannot finish in {:?}",
+            started.elapsed()
+        );
+        drop(stream);
+        assert_eq!(uploader.join().unwrap().unwrap(), 50_000);
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -133,6 +133,7 @@ impl TestServer {
             shared_directories: Vec::new(),
             accept_children: false,
             version: ClientVersion::default(),
+            ..Default::default()
         }
     }
 
@@ -4594,6 +4595,7 @@ fn phrases_the_server_excludes_are_kept_for_our_replies() {
         shared_directories: Vec::new(),
         accept_children: false,
         version: ClientVersion::default(),
+        ..Default::default()
     });
     client.connect().expect("connect to stub");
     assert!(client.login().expect("login to stub"));
@@ -5610,6 +5612,7 @@ fn a_dropped_client_has_released_its_listener_port_when_drop_returns() {
             shared_directories: Vec::new(),
             accept_children: false,
             version: ClientVersion::default(),
+            ..Default::default()
         });
         client.connect().expect("bind the listener");
         assert_eq!(client.listen_port(), Some(port), "round {round}");
@@ -5637,6 +5640,7 @@ fn a_cancelled_client_never_binds_its_port() {
         shared_directories: Vec::new(),
         accept_children: false,
         version: ClientVersion::default(),
+        ..Default::default()
     });
 
     client.cancel_handle().cancel();
@@ -5662,6 +5666,7 @@ fn a_cancel_ends_a_login_waiting_for_its_verdict_and_nothing_follows_it() {
         shared_directories: Vec::new(),
         accept_children: false,
         version: ClientVersion::default(),
+        ..Default::default()
     });
     client.connect().expect("start the session");
     let (mut conn, _) = server.accept().expect("the client dials the server");

@@ -1,8 +1,8 @@
 use super::{
     Arc, AtomicBool, Client, ClientContext, ClientOperation, ConnectionType,
     DownloadPeer, Listen, Peer, PeerRegistry, Receiver, Result, RwLock,
-    RwLockExt, Sender, ServerActor, ServerMessage, Shares, SoulseekRs,
-    TcpStream, error, info, mpsc, thread, trace, warn,
+    RwLockExt, Sender, ServerActor, ServerMessage, SoulseekRs, TcpStream,
+    error, info, mpsc, thread, trace, warn,
 };
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::RecvTimeoutError;
@@ -69,24 +69,10 @@ impl Client {
 
         // Scan the shared directories once into the read-only index, and
         // report the real folder/file counts to the server on login.
-        let roots: Vec<std::path::PathBuf> = self
-            .shared_directories
-            .iter()
-            .filter(|dir| !dir.trim().is_empty())
-            .map(std::path::PathBuf::from)
-            .collect();
-        let shares = if roots.is_empty() {
-            Arc::new(Shares::empty())
-        } else {
-            let scanned = Shares::scan_many(&roots);
-            info!(
-                "Sharing {} files in {} folders from {} directories",
-                scanned.file_count(),
-                scanned.folder_count(),
-                roots.len()
-            );
-            Arc::new(scanned)
-        };
+        let shares = Arc::new(super::scan_shares(
+            &self.shared_directories,
+            &self.excluded_directories,
+        ));
         let shared_folder_count = shares.folder_count();
         let shared_file_count = shares.file_count();
         ctx.shares = shares;

@@ -1038,6 +1038,7 @@ fn main() {
         shared_directories: vec![share_dir.display().to_string()],
         accept_children: false,
         version: ClientVersion::default(),
+        ..Default::default()
     });
     client.connect().expect("client connect");
     assert!(client.login().expect("client login"), "client login failed");

@@ -69,6 +69,7 @@ impl Subject {
             shared_directories: Vec::new(),
             accept_children: false,
             version: ClientVersion::default(),
+            ..Default::default()
         });
         client.connect().expect("connect subject");
         let port = client.listen_port().expect("subject listener port");

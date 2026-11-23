@@ -274,6 +274,7 @@ fn context(
             shared_directories: shared_directories(resolved, out),
             accept_children: resolved.accept_children,
             version: ClientVersion::REFERENCE_CLIENT,
+            ..Default::default()
         },
         download_dir,
         use_username_dirs: resolved.use_username_dirs,
@@ -469,6 +470,7 @@ fn run_default_tui(
             shared_directories: shared_directories.clone(),
             accept_children,
             version: ClientVersion::REFERENCE_CLIENT,
+            ..Default::default()
         };
 
     // Logging out closes the window and comes straight back to the login

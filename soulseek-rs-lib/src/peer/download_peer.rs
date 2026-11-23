@@ -389,10 +389,7 @@ impl DownloadPeer {
                 break;
             }
 
-            let allowance = speed_limit.take(READ_BUFFER_SIZE);
-            let read = stream.read(&mut read_buffer[..allowance]);
-            speed_limit.give_back(allowance - read.as_ref().map_or(0, |&n| n));
-            match read {
+            match speed_limit.read_throttled(stream, &mut read_buffer) {
                 Ok(0) => {
                     trace!(
                         "[download_peer:{}] connection closed by peer",

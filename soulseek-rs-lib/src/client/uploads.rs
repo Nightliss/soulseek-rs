@@ -63,6 +63,13 @@ impl Client {
         }
     }
 
+    /// Cap the combined speed of all uploads in bytes per second; `0` lifts it.
+    pub fn set_upload_speed_limit(&self, bytes_per_second: u64) {
+        if let Ok(ctx) = self.context.read_safe() {
+            ctx.upload_speed_limit.set(bytes_per_second);
+        }
+    }
+
     /// Drop everything `username` was queued or offered, then hand their slot to
     /// whoever is next.
     pub(crate) fn release_upload_slots(
@@ -136,6 +143,7 @@ impl Client {
                 started: std::time::Instant::now(),
             },
         );
+        let speed_limit = ctx.upload_speed_limit.clone();
         drop(ctx);
         let own = own_username.to_string();
         let real_path = job.real_path;
@@ -186,6 +194,7 @@ impl Client {
                 &real_path,
                 &bytes_sent,
                 &cancel,
+                &speed_limit,
             );
             Self::finish_upload(&context, token, &real_path, result);
         });
@@ -236,11 +245,15 @@ impl Client {
         if !upload.claim() {
             return;
         }
-        let Some((bytes_sent, cancel)) =
+        let Some((bytes_sent, cancel, speed_limit)) =
             client_context.write_safe().ok().and_then(|mut ctx| {
                 let active = ctx.active_uploads.get_mut(&upload.token)?;
                 active.started = std::time::Instant::now();
-                Some((active.bytes_sent.clone(), active.cancel.clone()))
+                Some((
+                    active.bytes_sent.clone(),
+                    active.cancel.clone(),
+                    ctx.upload_speed_limit.clone(),
+                ))
             })
         else {
             return;
@@ -253,6 +266,7 @@ impl Client {
                 &upload.real_path,
                 &bytes_sent,
                 &cancel,
+                &speed_limit,
             );
             Self::finish_upload(
                 &context,

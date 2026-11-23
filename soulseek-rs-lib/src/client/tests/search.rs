@@ -165,3 +165,29 @@ fn a_file_the_server_excludes_is_left_out_of_a_reply() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn settings_excludes_apply_to_the_rescanned_index() {
+    let dir = std::env::temp_dir()
+        .join(format!("soulseek-skipdirs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("_staging")).unwrap();
+    std::fs::write(dir.join("keep.bin"), b"k").unwrap();
+    std::fs::write(dir.join("_staging").join("hidden.bin"), b"h").unwrap();
+    let base = dir.file_name().unwrap().to_string_lossy().into_owned();
+
+    let client = Client::with_settings(ClientSettings {
+        excluded_directories: vec![dir.join("_staging").display().to_string()],
+        ..ClientSettings::new("me", "pw")
+    });
+    let _ = client.set_shared_directories(vec![dir.display().to_string()]);
+
+    let shares = client.context.read().unwrap().shares.clone();
+    assert!(shares.get(&format!("{base}\\keep.bin")).is_some());
+    assert!(
+        shares
+            .get(&format!("{base}\\_staging\\hidden.bin"))
+            .is_none()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
